@@ -46,7 +46,6 @@ Pipeline ETL completo para ingestão de dados de APIs externas (CoinGecko, Open 
 │   └── test_postgres_loader.py        # Testes do loader
 ├── scripts/
 │   └── init_airflow.sh                # Setup inicial do Airflow
-├── .github/workflows/tests.yml        # CI/CD GitHub Actions
 ├── Containerfile                      # Build da imagem Airflow
 ├── docker-compose.yml                 # Serviços: postgres, airflow, scheduler
 ├── .env                               # Variáveis de ambiente
@@ -181,10 +180,6 @@ python -m pytest tests/ --cov=src --cov-report=term-missing
 ```
 
 42 testes cobrindo: api_client, cleaner, postgres_loader.
-
-## CI/CD
-
-GitHub Actions roda testes automaticamente em push/PR para `main`/`master`.
 
 ## Setup com Podman
 
