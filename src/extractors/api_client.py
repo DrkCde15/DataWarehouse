@@ -195,6 +195,31 @@ class APIClient:
             url = response.links.get("next", {}).get("url")
             params = {}
 
+    def _paginate_page(
+        self,
+        endpoint: str,
+        page_size: int,
+        params: dict[str, Any] | None = None,
+        results_key: str = "results",
+    ) -> Generator[list[dict[str, Any]], None, None]:
+        """Paginação por page number (CoinGecko style)."""
+        page = 1
+        params = params or {}
+
+        while True:
+            page_params = {**params, "page": page, "per_page": page_size}
+            response = self.get(endpoint, params=page_params)
+
+            if isinstance(response, list):
+                results = response
+            else:
+                results = response.get(results_key, [])
+            if not results:
+                break
+
+            yield results
+            page += 1
+
     def get_all_pages(
         self,
         endpoint: str,
@@ -221,6 +246,7 @@ class APIClient:
             "offset": lambda: self._paginate_offset(endpoint, page_size, params, results_key),
             "cursor": lambda: self._paginate_cursor(endpoint, page_size, params, results_key=results_key),
             "link": lambda: self._paginate_link_header(endpoint, page_size, params),
+            "page": lambda: self._paginate_page(endpoint, page_size, params, results_key),
         }
 
         if pagination_type not in generators:
@@ -252,6 +278,7 @@ class APIClient:
             "offset": self._paginate_offset,
             "cursor": self._paginate_cursor,
             "link": self._paginate_link_header,
+            "page": self._paginate_page,
         }
 
         if pagination_type not in generators:

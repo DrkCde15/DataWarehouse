@@ -1,13 +1,13 @@
 # API → Data Warehouse Pipeline
 
-Pipeline ETL completo para ingestão de dados de APIs externas (CoinGecko) e armazenamento em Data Warehouse PostgreSQL, orquestrado por Apache Airflow em containers Podman.
+Pipeline ETL completo para ingestão de dados de APIs externas (CoinGecko, Open Library) e armazenamento em Data Warehouse PostgreSQL, orquestrado por Apache Airflow em containers Podman.
 
 ## Visão Geral
 
 ```
 ┌──────────────┐     ┌──────────────┐     ┌──────────────┐     ┌───────────────┐
 │  CoinGecko   │────▶│   Extract    │────▶│   Transform  │────▶│  PostgreSQL   │
-│     API      │     │  (Pull)      │     │  (Clean)     │     │  (Warehouse)  │
+│  Open Library│     │  (Pull)      │     │  (Clean)     │     │  (Warehouse)  │
 └──────────────┘     └──────────────┘     └──────────────┘     └───────────────┘
          │                                                         │
          └──────── Airflow DAG (Podman Containers) ───────────────┘
@@ -20,136 +20,171 @@ Pipeline ETL completo para ingestão de dados de APIs externas (CoinGecko) e arm
 ├── src/
 │   ├── extractors/
 │   │   ├── __init__.py
-│   │   ├── api_client.py              # Cliente API genérico (Airflow importa)
-│   │   └── api_client.ipynb           # Notebook de exploração
+│   │   └── api_client.py              # Cliente API genérico
 │   ├── transformers/
 │   │   ├── __init__.py
-│   │   ├── cleaner.py                 # Limpeza e transformação (Airflow importa)
-│   │   └── cleaner.ipynb              # Notebook de exploração
+│   │   └── cleaner.py                 # Limpeza e transformação
 │   └── loaders/
 │       ├── __init__.py
-│       ├── postgres_loader.py         # Inserção/upsert em PostgreSQL (Airflow importa)
-│       └── postgres_loader.ipynb      # Notebook de exploração
+│       └── postgres_loader.py         # Inserção/upsert em PostgreSQL
 ├── sql/
 │   ├── create_tables.sql              # DDL para staging, dimensões e fatos
+│   ├── populate_dim_fact.sql          # Popula dim e fact
+│   ├── analytics_views.sql            # Views de agregação
 │   └── init_airflow_db.sql            # Cria banco do Airflow
 ├── dags/
 │   ├── pipeline_dag.py                # DAG principal (coins/markets, coins/list)
 │   ├── pipeline_coingecko_global.py   # DAG para /global
-│   └── pipeline_coingecko_trending.py # DAG para /search/trending
+│   ├── pipeline_coingecko_trending.py # DAG para /search/trending
+│   └── pipeline_openlibrary.py        # DAG para Open Library
 ├── notebooks/
-│   └── 02_eda_coingecko.ipynb         # Análise exploratória das 4 tabelas
+│   ├── eda_coingecko.ipynb            # EDA CoinGecko
+│   └── eda_open_library.ipynb         # EDA Open Library
+├── tests/
+│   ├── test_api_client.py             # Testes do cliente API
+│   ├── test_cleaner.py                # Testes do limpeza
+│   └── test_postgres_loader.py        # Testes do loader
 ├── scripts/
 │   └── init_airflow.sh                # Setup inicial do Airflow
+├── .github/workflows/tests.yml        # CI/CD GitHub Actions
 ├── Containerfile                      # Build da imagem Airflow
 ├── docker-compose.yml                 # Serviços: postgres, airflow, scheduler
-├── .dockerignore
-├── .gitignore
+├── .env                               # Variáveis de ambiente
 ├── requirements.txt
 └── README.md
 ```
 
-> **Importante:** Arquivos `.py` e `.ipynb` coexistem em `src/`. O Airflow importa os `.py`; os `.ipynb` são para documentação/exploração local.
+## Fontes de Dados
 
-## Fonte de Dados: CoinGecko API
+### CoinGecko API
 
 - **Base URL:** `https://api.coingecko.com/api/v3`
 - **Autenticação:** Demo API (sem chave)
-- **Endpoints utilizados:**
 
 | Endpoint | Tabela | Descrição |
 |---|---|---|
 | `/coins/markets` | `staging.coingecko_coins` | Preço, market cap, volume, ATH, ATL |
-| `/coins/list` | `staging.coingecko_list` | Lista completa de moedas (id, symbol, name) |
+| `/coins/list` | `staging.coingecko_list` | Lista completa de moedas |
 | `/global` | `staging.coingecko_global` | Estatísticas globais do mercado |
-| `/search/trending` | `staging.coingecko_trending` | Moedas em alta no momento |
+| `/search/trending` | `staging.coingecko_trending` | Moedas em alta |
 
-## Tabelas de Staging
+### Open Library API
 
-| Tabela | Colunas | Exemplo de dado |
+- **Base URL:** `https://openlibrary.org`
+- **Autenticação:** Não precisa (com User-Agent)
+
+| Endpoint | Tabela | Descrição |
 |---|---|---|
-| `coingecko_coins` | 27 | Bitcoin: price, market_cap, volume, ath, atl, etc. |
-| `coingecko_list` | 3 | {"id": "bitcoin", "symbol": "btc", "name": "Bitcoin"} |
-| `coingecko_global` | 11 | Market cap total, dominancia BTC/ETH, JSONB |
-| `coingecko_trending` | 13 | Moedas trending com score, price_btc, data (JSONB) |
+| `/subjects/{subject}.json` | `staging.openlibrary_books` | Livros por assunto |
 
 ## DAGs
 
-### pipeline_etl_api (principal)
+### pipeline_etl_api
 
-Para `/coins/markets` e `/coins/list`. Execute via UI ou CLI:
+Para CoinGecko. Execute via UI ou CLI:
 
 ```bash
-# /coins/markets (100 moedas com market data)
+# /coins/markets
 podman exec 02-api-data-warehouse_airflow-scheduler_1 airflow dags trigger pipeline_etl_api \
   --conf '{
     "endpoint": "/coins/markets",
-    "pagination_type": "offset",
+    "pagination_type": "page",
     "page_size": 250,
     "target_table": "staging.coingecko_coins",
-    "conflict_columns": null,
-    "source_api": "coingecko",
-    "query_params": {
-      "vs_currency": "usd",
-      "order": "market_cap_desc",
-      "per_page": 100,
-      "page": 1,
-      "sparkline": false,
-      "price_change_percentage": "24h,7d,30d"
-    }
+    "conflict_columns": ["coin_id"],
+    "vs_currency": "usd"
   }'
 
-# /coins/list (lista completa de ~19k moedas)
+# /coins/list
 podman exec 02-api-data-warehouse_airflow-scheduler_1 airflow dags trigger pipeline_etl_api \
   --conf '{
     "endpoint": "/coins/list",
     "pagination_type": "none",
-    "page_size": 250,
     "target_table": "staging.coingecko_list",
-    "conflict_columns": null,
-    "source_api": "coingecko",
-    "query_params": {}
+    "conflict_columns": ["coin_id"]
   }'
 ```
 
 ### pipeline_coingecko_global
 
-Execute via **Airflow UI** → Trigger DAG. Defaults já configurados.
+Execute via **Airflow UI** → Trigger DAG.
 
 ### pipeline_coingecko_trending
 
-Execute via **Airflow UI** → Trigger DAG. Defaults já configurados.
+Execute via **Airflow UI** → Trigger DAG.
+
+### pipeline_openlibrary
+
+Execute via **Airflow UI** → Trigger DAG. Extrai livros por subjects (fiction, science, history, technology, philosophy).
 
 ## Parâmetros do DAG
 
 | Param | Default | Descrição |
 |---|---|---|
 | `endpoint` | `/coins/markets` | Path da API |
-| `pagination_type` | `"offset"` | `"offset"` ou `"none"` |
+| `pagination_type` | `"offset"` | `"none"`, `"offset"`, `"page"`, `"cursor"`, `"link"` |
 | `page_size` | `250` | Itens por página |
 | `target_table` | `staging.coingecko_coins` | Tabela destino |
-| `conflict_columns` | `null` | Colunas para upsert (ou `null` para insert) |
-| `source_api` | `"coingecko"` | Nome da fonte |
-| `query_params` | `null` | Params da query string da API |
+| `conflict_columns` | `null` | Colunas para upsert |
+| `vs_currency` | `"usd"` | Moeda de referência |
 | `results_key` | `"results"` | Chave JSON com os registros |
-| `record_path` | `null` | Caminho para extrair sub-registros |
+| `record_path` | `null` | Caminho para sub-registros |
 
-## Fluxo de Execução
+## Variáveis de Ambiente (.env)
 
 ```
-start → register_start → extract → transform → load → register_success → end
-                                                  ↓
-                                            register_failure
+COINGECKO_BASE_URL=https://api.coingecko.com/api/v3
+OPENLIBRARY_BASE_URL=https://openlibrary.org
+DB_CONNECTION_STRING=postgresql+psycopg2://postgres:postgres@postgres:5432/data_warehouse
 ```
 
-| Task | Função |
-|---|---|
-| `register_start` | Registra início no `metadata.job_log` |
-| `extract` | Chama API, serializa JSON no XCom |
-| `transform` | Limpa dados com `DataCleaner`, serializa para JSON |
-| `load` | Insere no PostgreSQL (bulk_insert ou upsert) |
-| `register_success` | Registra conclusão no `metadata.job_log` |
-| `register_failure` | Registra falha no `metadata.job_log` |
+## Schema do Data Warehouse
+
+```
+staging/          → Dados brutos das APIs
+  ├── coingecko_coins
+  ├── coingecko_list
+  ├── coingecko_global
+  ├── coingecko_trending
+  └── openlibrary_books
+
+dim/              → Dimensões
+  ├── dim_coins
+  ├── dim_date (2022-2027)
+  └── dim_entities
+
+fact/             → Fatos
+  └── fact_coin_daily
+
+analytics/        → Views de agregação
+  ├── v_coin_daily_summary
+  ├── v_top_coins_by_market_cap
+  ├── v_weekly_performance
+  ├── v_openlibrary_books_by_subject
+  ├── v_trending_coins
+  └── v_global_market_summary
+
+metadata/         → Controle ETL
+  ├── etl_jobs
+  ├── v_latest_jobs
+  └── v_load_summary
+```
+
+## Testes
+
+```bash
+# Rodar todos os testes
+python -m pytest tests/ -v
+
+# Rodar com cobertura
+python -m pytest tests/ --cov=src --cov-report=term-missing
+```
+
+42 testes cobrindo: api_client, cleaner, postgres_loader.
+
+## CI/CD
+
+GitHub Actions roda testes automaticamente em push/PR para `main`/`master`.
 
 ## Setup com Podman
 
@@ -158,56 +193,12 @@ start → register_start → extract → transform → load → register_success
 podman compose up -d
 
 # 2. Verificar status
-podman compose ps
+podman ps
 
 # 3. Acessar Airflow
 # Webserver: http://localhost:8080 (admin/admin)
 # Postgres:  localhost:5432
 ```
-
-## Setup Local (Desenvolvimento)
-
-```bash
-# 1. Criar ambiente virtual
-python -m venv .venv
-source .venv/bin/activate
-
-# 2. Instalar dependências
-pip install -r requirements.txt
-```
-
-## Conceitos-Chave
-
-### Extração (Extract)
-- Cliente HTTP genérico com paginação (offset, cursor, link, none)
-- Rate limiting para evitar bloqueio pela API
-- Retry automático com backoff exponencial
-- Suporte a `query_params`, `results_key`, `record_path`
-
-### Transformação (Transform)
-- Padronização de nomes de colunas (snake_case)
-- Limpeza de dados nulos e duplicados
-- Inferência e conversão automática de tipos
-- Tratamento de dicts/lists com `json.dumps()` (para JSONB)
-- Conversão de unix timestamps para ISO string
-- Serialização de dados via XCom (JSON strings)
-
-### Carga (Load)
-- Bulk insert para cargas completas
-- Upsert (ON CONFLICT DO UPDATE) para cargas incrementais
-- Filtragem automática de colunas que existem na tabela
-- Tratamento de erros com logging
-
-### Análise (EDA)
-
-O notebook `notebooks/eda_coingecko.ipynb` cobre:
-1. Conexão com PostgreSQL
-2. Visão geral das 4 tabelas
-3. Análise de `coingecko_coins` (preço, market cap, volume, correlações)
-4. Análise de `coingecko_list` (distribuição de símbolos)
-5. Análise de `coingecko_global` (market cap total, dominância)
-6. Análise de `coingecko_trending` (moedas em alta)
-7. Histórico de jobs ETL
 
 ## Licença
 

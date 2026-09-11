@@ -99,3 +99,13 @@ class TestAPIClient:
         mock_get.return_value = []
         result = self.client.get_all_pages("/test", pagination_type="none")
         assert result == []
+
+    @patch.object(APIClient, "get")
+    def test_paginate_page(self, mock_get):
+        mock_get.side_effect = [
+            {"results": [{"id": 1}], "total": 2},
+            {"results": [{"id": 2}], "total": 2},
+            {"results": [], "total": 2},
+        ]
+        result = self.client.get_all_pages("/test", pagination_type="page", results_key="results")
+        assert result == [{"id": 1}, {"id": 2}]

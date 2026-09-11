@@ -113,6 +113,36 @@ CREATE TABLE IF NOT EXISTS staging.coingecko_trending (
 CREATE INDEX IF NOT EXISTS idx_coingecko_trending_coin_id ON staging.coingecko_trending(coin_id);
 
 -- ============================================================
+-- TABELAS DE STAGING - OPEN LIBRARY
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS staging.openlibrary_books (
+    id SERIAL PRIMARY KEY,
+    olid VARCHAR(100) NOT NULL,
+    title VARCHAR(1000) NOT NULL,
+    edition_count INTEGER,
+    cover_id INTEGER,
+    cover_edition_key VARCHAR(100),
+    subject VARCHAR(100),
+    ia_collection JSONB,
+    printdisabled BOOLEAN,
+    lending_edition VARCHAR(100),
+    lending_identifier VARCHAR(100),
+    authors JSONB,
+    first_publish_year INTEGER,
+    ia VARCHAR(100),
+    public_scan BOOLEAN,
+    has_fulltext BOOLEAN,
+    availability JSONB,
+    cover_url TEXT,
+    _extracted_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    _loaded_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_openlibrary_books_olid ON staging.openlibrary_books(olid);
+CREATE INDEX IF NOT EXISTS idx_openlibrary_books_subject ON staging.openlibrary_books(subject);
+
+-- ============================================================
 -- TABELAS DE DIMENSÃO
 -- ============================================================
 

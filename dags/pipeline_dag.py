@@ -31,8 +31,8 @@ def extract_data(**context) -> None:
     import json
 
     client = APIClient(
-        base_url=Variable.get("api_base_url"),
-        api_key=Variable.get("api_key"),
+        base_url=Variable.get("coingecko_base_url"),
+        api_key=Variable.get("coingecko_api_key", default_var=None),
         rate_limit=API_RATE_LIMIT,
     )
 
