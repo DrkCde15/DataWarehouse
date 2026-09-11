@@ -1,0 +1,84 @@
+services:
+  postgres:
+    image: docker.io/library/postgres:16
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-data_warehouse}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./sql/init_airflow_db.sql:/docker-entrypoint-initdb.d/00_init_airflow_db.sql:ro
+      - ./sql/create_tables.sql:/docker-entrypoint-initdb.d/01_create_tables.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - airflow-net
+
+  airflow-init:
+    build: .
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/airflow_db
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      API_BASE_URL: ${API_BASE_URL:-https://api.exemplo.com/v1}
+      API_KEY: ${API_KEY:-sua_chave_aqui}
+      DB_CONNECTION_STRING: ${DB_CONNECTION_STRING:-postgresql+psycopg2://postgres:postgres@postgres:5432/data_warehouse}
+    volumes:
+      - ./scripts/init_airflow.sh:/opt/airflow/init_airflow.sh:ro
+    entrypoint: /bin/bash
+    command: /opt/airflow/init_airflow.sh
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - airflow-net
+
+  airflow-webserver:
+    build: .
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/airflow_db
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    ports:
+      - "8080:8080"
+    volumes:
+      - airflow_logs:/home/airflow/logs
+      - ./dags:/opt/airflow/dags
+      - ./src:/opt/airflow/project/src
+      - ./sql:/opt/airflow/sql
+    command: airflow webserver
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    networks:
+      - airflow-net
+
+  airflow-scheduler:
+    build: .
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/airflow_db
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+    volumes:
+      - airflow_logs:/home/airflow/logs
+      - ./dags:/opt/airflow/dags
+      - ./src:/opt/airflow/project/src
+      - ./sql:/opt/airflow/sql
+    command: airflow scheduler
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    networks:
+      - airflow-net
+
+volumes:
+  postgres_data:
+  airflow_logs:
+
+networks:
+  airflow-net:
